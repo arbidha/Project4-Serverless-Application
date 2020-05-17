@@ -4,11 +4,13 @@ import 'source-map-support/register'
 import { verify, decode } from 'jsonwebtoken'
 import { createLogger } from '../../utils/logger'
 import Axios from 'axios'
-import { Jwt } from '../../auth/Jwt'
 import { JwtPayload } from '../../auth/JwtPayload'
+import { Jwt } from '../../auth/Jwt'
+
 
 const logger = createLogger('auth')
 
+// TODO: Provide a URL that can be used to download a certificate that can be used
 const jwksUrl = 'https://dev-cx-59397.auth0.com/.well-known/jwks.json'
 
 export const handler = async (
@@ -16,7 +18,7 @@ export const handler = async (
 ): Promise<CustomAuthorizerResult> => {
   logger.info('Authorizing a user', event.authorizationToken)
   try {
-    const jwtToken = await  verifyToken(event.authorizationToken)
+    const jwtToken = await verifyToken(event.authorizationToken)
     logger.info('User was authorized', jwtToken)
 
     return {
@@ -33,7 +35,7 @@ export const handler = async (
       }
     }
   } catch (e) {
-    logger.error('User not authorized', { error: e })
+    logger.error('User not authorized', { error: e.message })
 
     return {
       principalId: 'user',
@@ -51,26 +53,33 @@ export const handler = async (
   }
 }
 
- async function verifyToken(authHeader: string): Promise<JwtPayload> {
+async function verifyToken(authHeader: string): Promise<JwtPayload> {
   const token = getToken(authHeader)
   const jwt: Jwt = decode(token, { complete: true }) as Jwt
+  const jwtKid = jwt.header.kid
+  let cert: string | Buffer
 
-  if(!jwt){
-    throw new Error('invalid token')
-  }
+  // TODO: Implement token verification
 
   try {
-    const response = await Axios.get(jwksUrl);
-    console.log(response);
-    var verifedToken = verify(token,response.data,{algorithms:['RS256']})
+    const jwks = await Axios.get(jwksUrl);
+    const signingKey = jwks.data.keys.filter(k => k.kid === jwtKid)[0];
 
-    console.log('verfied toekn',verifedToken)
-    return  verifedToken as JwtPayload
+    if (!signingKey) {
+      throw new Error(`Unable to find a signing key that matches '${jwtKid}'`);
+    }
+    const { x5c } = signingKey;
+
+    cert = `-----BEGIN CERTIFICATE-----\n${x5c[0]}\n-----END CERTIFICATE-----`;
+
   } catch (error) {
-    console.error(error);
-    return undefined
+    console.log('Error While getting Certificate : ', error);
   }
+
+  return verify(token, cert, { algorithms: ['RS256'] }) as JwtPayload;
 }
+
+
 
 function getToken(authHeader: string): string {
   if (!authHeader) throw new Error('No authentication header')
